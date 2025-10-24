@@ -1,0 +1,16 @@
+.git
+.env
+node_modules
+packages
+vendor
+tests
+.DS_Store
+vapor.yml
+.vapor
+storage/app/livewire-tmp/*
+storage/app/public/profile-photos/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/testing/*
+storage/framework/views/*
+storage/logs/*

@@ -1,0 +1,110 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Interfaces\MarketData;
+
+use App\Interfaces\MarketData\Types\Dividend;
+use App\Interfaces\MarketData\Types\Ohlc;
+use App\Interfaces\MarketData\Types\Quote;
+use App\Interfaces\MarketData\Types\Split;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
+use Scheb\YahooFinanceApi\ApiClient;
+use Scheb\YahooFinanceApi\ApiClientFactory as YahooFinance;
+
+class YahooMarketData implements MarketDataInterface
+{
+    public ApiClient $client;
+
+    public function __construct()
+    {
+
+        // create yahoo finance client factory
+        $this->client = YahooFinance::createApiClient(
+            clientOptions: ['headers' => ['User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36']],
+            cache: app('cache.psr6')
+        );
+    }
+
+    public function exists(string $symbol): bool
+    {
+
+        return (bool) $this->quote($symbol);
+    }
+
+    public function quote(string $symbol): Quote
+    {
+
+        $quote = $this->client->getQuote($symbol);
+
+        if (is_null($quote?->getRegularMarketPrice())) {
+            throw new \Exception('Could not find ticker on Yahoo');
+        }
+
+        return new Quote([
+            'name' => $quote?->getLongName() ?? $quote?->getShortName(),
+            'symbol' => $symbol,
+            'currency' => $quote?->getCurrency(),
+            'market_value' => $quote?->getRegularMarketPrice(),
+            'fifty_two_week_high' => $quote?->getFiftyTwoWeekHigh(),
+            'fifty_two_week_low' => $quote?->getFiftyTwoWeekLow(),
+            'forward_pe' => $quote?->getForwardPE(),
+            'trailing_pe' => $quote?->getTrailingPE(),
+            'market_cap' => $quote?->getMarketCap(),
+            'book_value' => $quote?->getBookValue(),
+            'last_dividend_date' => $quote?->getDividendDate(),
+            'dividend_yield' => $quote?->getTrailingAnnualDividendYield() * 100,
+            'meta_data' => [
+                'exchange' => $quote?->getExchange(),
+                'asset_type' => $quote?->getQuoteType(),
+                'source' => 'yahoo',
+            ],
+        ]);
+    }
+
+    public function dividends(string $symbol, $startDate, $endDate): Collection
+    {
+
+        return collect($this->client->getHistoricalDividendData($symbol, $startDate, $endDate))
+            ->map(function ($dividend) use ($symbol) {
+
+                return new Dividend([
+                    'symbol' => $symbol,
+                    'date' => $dividend->getDate(),
+                    'dividend_amount' => $dividend->getDividends(),
+                ]);
+            });
+    }
+
+    public function splits(string $symbol, $startDate, $endDate): Collection
+    {
+
+        return collect($this->client->getHistoricalSplitData($symbol, $startDate, $endDate))
+            ->map(function ($split) use ($symbol) {
+                $split_amount = explode(':', $split->getStockSplits());
+
+                return new Split([
+                    'symbol' => $symbol,
+                    'date' => $split->getDate(),
+                    'split_amount' => $split_amount[0] / $split_amount[1],
+                ]);
+            });
+    }
+
+    public function history(string $symbol, $startDate, $endDate): Collection
+    {
+
+        return collect($this->client->getHistoricalQuoteData($symbol, ApiClient::INTERVAL_1_DAY, $startDate, $endDate))
+            ->mapWithKeys(function ($history) use ($symbol) {
+
+                $date = Carbon::parse($history->getDate())->toDateString();
+
+                return [$date => new Ohlc([
+                    'symbol' => $symbol,
+                    'date' => $date,
+                    'close' => $history->getClose(),
+                ])];
+            });
+    }
+}

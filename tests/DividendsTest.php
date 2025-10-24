@@ -1,0 +1,92 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests;
+
+use App\Models\Dividend;
+use App\Models\Holding;
+use App\Models\MarketData;
+use App\Models\Portfolio;
+use App\Models\Transaction;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+class DividendsTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_new_dividends_update_holding(): void
+    {
+        $this->actingAs($user = User::factory()->create());
+
+        $portfolio = Portfolio::factory()->create();
+        Transaction::factory()->buy()->yearsAgo()->portfolio($portfolio->id)->symbol('ACME')->create();
+
+        $holding = Holding::query()->portfolio($portfolio->id)->symbol('ACME')->first();
+
+        $this->assertEquals(0, $holding->dividends_earned);
+
+        Dividend::refreshDividendData('ACME');
+
+        $holding->refresh();
+
+        $this->assertEquals(4.95, $holding->dividends_earned);
+    }
+
+    public function test_new_dividends_are_reinvested(): void
+    {
+        $this->actingAs($user = User::factory()->create());
+
+        $portfolio = Portfolio::factory()->create();
+        Transaction::factory()->buy()->yearsAgo()->portfolio($portfolio->id)->symbol('ACME')->create();
+
+        $holding = Holding::query()->portfolio($portfolio->id)->symbol('ACME')->first();
+        $holding->reinvest_dividends = true;
+        $holding->save();
+
+        $this->assertEquals(0, $holding->dividends_earned);
+
+        Dividend::refreshDividendData('ACME');
+
+        $transactions = Transaction::where(['reinvested_dividend' => true])->symbol('ACME')->portfolio($portfolio->id)->get();
+
+        $market_data = MarketData::symbol('ACME')->first();
+        $dividendsReinvested = $transactions->sum('quantity');
+
+        $this->assertCount(3, $transactions);
+        $this->assertEqualsWithDelta(4.95, $dividendsReinvested * $market_data->market_value, 0.01);
+    }
+
+    public function test_cannot_insert_duplicate_dividends(): void
+    {
+        // first insert
+        Dividend::refreshDividendData('ACME');
+
+        // try to duplicate
+        Dividend::refreshDividendData('ACME');
+
+        $dividend_count = Dividend::count();
+
+        $this->assertEquals(3, $dividend_count);
+    }
+
+    public function test_dividend_earnings_are_not_shared_between_portfolios(): void
+    {
+        $this->actingAs($user = User::factory()->create());
+
+        $portfolioOne = Portfolio::factory()->create();
+        Transaction::factory()->buy()->yearsAgo()->portfolio($portfolioOne->id)->symbol('ACME')->create();
+
+        $portfolioTwo = Portfolio::factory()->create();
+        Transaction::factory(2)->buy()->sixMonthsAgo()->portfolio($portfolioTwo->id)->symbol('ACME')->create();
+
+        Dividend::refreshDividendData('ACME');
+
+        $holdingOne = Holding::query()->portfolio($portfolioOne->id)->symbol('ACME')->first();
+        $holdingTwo = Holding::query()->portfolio($portfolioTwo->id)->symbol('ACME')->first();
+
+        $this->assertEquals(4.95, $holdingOne->dividends_earned);
+        $this->assertEquals(8, $holdingTwo->dividends_earned);
+    }
+}
